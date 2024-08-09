@@ -1,0 +1,216 @@
+
+
+Guest kick host 流程：
+
+virtqueue_kick(vq)
+	-> virtqueue_notify(vq)
+	-> vring_virtqueue *vq
+	   vq->notify(_vq)	//也就是最后调用了 vring_virtqueue 结构体中的 notify 函数
+	   
+那 notify 函数又在哪里初始化的呢？
+
+打开 virtio_pci_modern.c 文件
+/*
+virtio_pci_legacy.c：主要支持virtio 1.0之前的版本（也称为Legacy版本）
+virtio_pci_modern.c：支持virtio 1.0及之后的版本（也称为Modern版本）
+*/
+
+在 virtio_pci_modern_probe 函数中 
+	vp_dev->setup_vq = setup_vq   
+进入 setup_vq 
+	vring_create_virtqueue(XXX, vp_notify, callback, XXX);
+	在该函数中可以看到 vp_notify 函数
+
+进入该函数可以看到  vring_create_virtqueue_packed 和  vring_create_virtqueue_split 函数，随便进一个
+
+即可以看到              struct vring_virtqueue *vq;
+		vq->notify = notify; 	这样就设置了  notify 函数
+		
+那 notify 函数长什么样子呢 ？ 如下
+
+bool vp_notify(struct virtqueue *vq)
+{
+	iowrite16(vq->index, (void __iomem *)vq->priv);
+	return true;
+}
+把vq的index编号写入到设备的IO地址空间中
+可以看到，实际上前端通知后端仅仅是把队列的索引写入到对应的设备寄存器中,这样在后端qemu就会知道是哪个队列发生了add buffer，然后就从对应队列的buffer取出数据。
+
+=============================================================================================================================================================================
+
+Guest VQ 的初始化流程， callback 的注册流程：
+
+还是先进入到 virtio_pci_common.c 文件中
+
+进入   virtio_pci_probe 函数 
+    -> virtio_pci_modern_probe
+      -> vp_dev->setup_vq = setup_vq  进入  setup_vq
+        -> vring_create_virtqueue
+            -> vring_create_virtqueue_packed
+            -> struct vring_virtqueue *vq 
+可以看到这里会设置一些 callbacks function 和 names , VQ 也就是在这里进行初始化的，如下： 
+	vq->vq.callback = callback;
+	vq->vq.vdev = vdev;
+	vq->vq.name = name;
+	vq->vq.num_free = num;
+	vq->vq.index = index;
+其实  guest 设置的  callback 函数 和 name 以及  vqs 都是在这里进行初始化的 ，真的吗？，继续往下分析
+
+
+这里  setup_vq 是一个回调函数，那是谁调用的呢？ 可以搜索一下看看 
+    
+可以在  vp_setup_vq 函数中找到如下代码段：
+vq = vp_dev->setup_vq(vp_dev, info, index, callback, name, ctx, msix_vec);
+
+也就是说  setup_vq 是在  vp_setup_vq 函数中进行调用的， 并且传递了一些 函数， 包括 callback、name 等
+
+再继续往上跟踪，看谁调用  vp_setup_vq 函数
+
+可以看到在 vp_find_vqs_intx 函数中有调用，再往上跟踪 
+
+能够看到在   vp_find_vqs 函数中调用了  vp_find_vqs_intx  函数
+
+再继续往上跟踪会发现  vp_find_vqs 函数在  vp_modern_find_vqs 函数中被调用 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+注意： 这里如果跟踪的是   virtio_pci_legacy.c 文件的话， 这里会直接是  ：
+static const struct virtio_config_ops virtio_pci_config_ops = {
+	.find_vqs = vp_find_vqs
+};
+
+<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+对于     virtio_pci_modern.c  文件需要再往上跟踪  vp_modern_find_vqs 函数才能看到上面的结构，如下：
+
+static const struct virtio_config_ops virtio_pci_config_ops = {
+	.find_vqs	= vp_modern_find_vqs,
+};
+
+也就是说 vp_modern_find_vqs 函数被配置到了 virtio_config_ops 结构体中的 find_vqs 参数中
+如果想调用  vp_modern_find_vqs 函数的话必须要通过  virtio_config_ops 里面的  find_vqs 参数进行调用
+那该怎么找呢？
+
+直接在  linux 源码中搜索   virtio_find_vqs  函数，该函数是用来初始化  VQ 的
+
+随便进入一个文件即可，比如以 virtio_blk.c 文件为例
+
+该函数在   virtblk_probe -> init_vq -> virtio_find_vqs 中调用，函数参数中就将一些需要初始化的参数传递进去， 比如 callback、 name 等
+
+进入  virtio_find_vqs 函数的实现      include/virtio_config.h  可以看到如下代码：
+
+static inline
+int virtio_find_vqs(struct virtio_device *vdev, unsigned nvqs,
+			struct virtqueue *vqs[], vq_callback_t *callbacks[],
+			const char * const names[],
+			struct irq_affinity *desc)
+{
+	return vdev->config->find_vqs(vdev, nvqs, vqs, callbacks, names, NULL, desc);
+}
+
+在这里调用了  vdev->config->find_vqs 函数 ，而  vdev->config 的类型为  struct virtio_config_ops *config 
+
+其实也就是 调用了上面设置的  vp_modern_find_vqs 函数，这样也就完成  VQ 的一些初始化
+
+
+===============================================================================================================================================================================
+
+上面将  callback 函数已经注册到了系统中，那什么时候会被调用呢？
+
+该  callback 函数是当  host 端修改完数据之后，host 端会给  guest 注入一个中断，中断触发后，该  callback 函数就会被调用，具体流程如下分析：
+
+上面分析了  callback 函数的注册是在  vp_modern_find_vqs 函数中实现的，如下结构体
+static const struct virtio_config_ops virtio_pci_config_ops = {
+	.find_vqs	= vp_modern_find_vqs,
+};
+
+>>>>>>>>>>  注意： 我这里以  virtio_pci_modern.c 文件进行分析，如果是分析的   virtio_pci_legacy.c 文件可能会有所差异，但大概流程都相同
+
+进入到 vp_modern_find_vqs 函数
+
+      ==>  vp_find_vqs();
+      ==>  vp_find_vqs_intx();
+
+在  vp_find_vqs_intx 函数中可以看到以下代码段:
+
+request_irq(vp_dev->pci_dev->irq, vp_interrupt, IRQF_SHARED,dev_name(&vdev->dev), vp_dev);
+    
+request_irq 函数就是用来注册中断函数的， 并且将 vp_interrupt 函数设置为中断的回调函数
+
+进入该回调函数
+
+	vp_interrupt
+	==> vp_vring_interrupt()
+	==> vring_interrupt()
+
+vring_interrupt 函数定义在  /drivers/virtio/virtio_ring.c  文件中	
+    
+在  vring_interrupt  函数中能够看到下面关键的代码段：
+	if (vq->vq.callback)
+		vq->vq.callback(&vq->vq);
+
+在上面的分析中   vq->vq.callback 已经被初始化了用户定义的回调函数
+即
+  vq->vq.callback = callback;
+所以在这里的中断回调函数中就会调用上面初始化的回调函数
+这也就解释了注册  VQ 时的回调函数为什么说是在中断上下文了
+
+附录：
+
+[ 7299.020031] virtio test_request_done get ack
+[ 7299.020188] CPU: 0 PID: 0 Comm: swapper/0 Not tainted 5.4.239 #19
+[ 7299.020304] Hardware name: linux,dummy-virt (DT)
+[ 7299.020433] Call trace:
+[ 7299.020490]  dump_backtrace+0x0/0x190
+[ 7299.020567]  show_stack+0x14/0x20
+[ 7299.020670]  dump_stack+0xcc/0x108
+[ 7299.020736]  test_request_done+0x4c/0xe0
+[ 7299.020846]  vring_interrupt+0x60/0xa0
+[ 7299.020943]  vm_interrupt+0x84/0xd0
+[ 7299.021024]  __handle_irq_event_percpu+0x54/0x160
+[ 7299.021132]  handle_irq_event+0x60/0xf0
+[ 7299.021249]  handle_fasteoi_irq+0xa0/0x190
+[ 7299.021346]  __handle_domain_irq+0x70/0xcc
+[ 7299.021446]  gic_handle_irq+0xc0/0x158
+[ 7299.021518]  el1_irq+0xb8/0x180
+[ 7299.021589]  arch_cpu_idle+0x10/0x20
+[ 7299.021706]  cpu_startup_entry+0x24/0x70
+[ 7299.021821]  rest_init+0xd4/0xe0
+[ 7299.021908]  arch_call_rest_init+0xc/0x14
+[ 7299.021987]  start_kernel+0x3f0/0x424
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		
+		
+		
+		
+
+
+

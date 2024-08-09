@@ -1,0 +1,11 @@
+
+https://blogs.oracle.com/linux/post/introduction-to-virtio
+
+
+https://github.com/qemu/qemu/blob/master/docs/devel/virtio-backends.rst
+
+
+https://rcore-os.cn/rCore-Tutorial-Book-v3/chapter9/2device-driver-2.html
+
+
+https://juniorprincewang.github.io/2018/03/01/virtio-docs/
