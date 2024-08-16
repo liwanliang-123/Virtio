@@ -1,0 +1,194 @@
+diff --git a/scripts/devshell/run-qemu b/scripts/devshell/run-qemu
+index 8a4075e68..71fcfb775 100755
+--- a/scripts/devshell/run-qemu
++++ b/scripts/devshell/run-qemu
+@@ -80,6 +80,7 @@ ${QEMU_EXEC} -kernel ${LINUX_IMAGE} \
+     -smp 4 \
+     -m 1024 \
+     -display none -nographic \
++    -device virtio-test-device	\
+     -drive file=${ROOTFS_OUT},if=none,format=raw,id=hd0 -device virtio-blk-device,drive=hd0 \
+     -netdev user,id=net0,net=192.168.3.0/24,hostfwd=tcp::8822-192.168.3.53:22 -device virtio-net-pci,netdev=net0 \
+     -append "console=ttyAMA0,38400 keep_bootcon root=/dev/vda" \
+diff --git a/srcs/linux-5.4.239/drivers/virtio/Makefile b/srcs/linux-5.4.239/drivers/virtio/Makefile
+index 3a2b5c5dc..3019f53c4 100644
+--- a/srcs/linux-5.4.239/drivers/virtio/Makefile
++++ b/srcs/linux-5.4.239/drivers/virtio/Makefile
+@@ -6,3 +6,6 @@ virtio_pci-y := virtio_pci_modern.o virtio_pci_common.o
+ virtio_pci-$(CONFIG_VIRTIO_PCI_LEGACY) += virtio_pci_legacy.o
+ obj-$(CONFIG_VIRTIO_BALLOON) += virtio_balloon.o
+ obj-$(CONFIG_VIRTIO_INPUT) += virtio_input.o
++
++
++obj-y += virtio_test.o
+diff --git a/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h b/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h
+index 585e07b27..060f24c57 100644
+--- a/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h
++++ b/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h
+@@ -46,5 +46,6 @@
+ #define VIRTIO_ID_IOMMU        23 /* virtio IOMMU */
+ #define VIRTIO_ID_FS           26 /* virtio filesystem */
+ #define VIRTIO_ID_PMEM         27 /* virtio pmem */
++#define VIRTIO_ID_TEST         45 /* virtio test */
+ 
+ #endif /* _LINUX_VIRTIO_IDS_H */
+diff --git a/srcs/qemu-7.2.0/hw/virtio/Kconfig b/srcs/qemu-7.2.0/hw/virtio/Kconfig
+index cbfd8c717..52a96a821 100644
+--- a/srcs/qemu-7.2.0/hw/virtio/Kconfig
++++ b/srcs/qemu-7.2.0/hw/virtio/Kconfig
+@@ -30,6 +30,11 @@ config VIRTIO_BALLOON
+     default y
+     depends on VIRTIO
+ 
++config VIRTIO_TEST
++    bool
++    default y
++    depends on VIRTIO
++
+ config VIRTIO_CRYPTO
+     bool
+     default y
+diff --git a/srcs/qemu-7.2.0/hw/virtio/meson.build b/srcs/qemu-7.2.0/hw/virtio/meson.build
+index dfed1e7af..1ec8a9830 100644
+--- a/srcs/qemu-7.2.0/hw/virtio/meson.build
++++ b/srcs/qemu-7.2.0/hw/virtio/meson.build
+@@ -18,6 +18,7 @@ else
+   softmmu_virtio_ss.add(files('vhost-stub.c'))
+ endif
+ 
++virtio_ss.add(when: 'CONFIG_VIRTIO_TEST', if_true: files('virtio-test.c'))
+ virtio_ss.add(when: 'CONFIG_VIRTIO_BALLOON', if_true: files('virtio-balloon.c'))
+ virtio_ss.add(when: 'CONFIG_VIRTIO_CRYPTO', if_true: files('virtio-crypto.c'))
+ virtio_ss.add(when: 'CONFIG_VHOST_USER_FS', if_true: files('vhost-user-fs.c'))
+diff --git a/srcs/qemu-7.2.0/hw/virtio/virtio-pci.c b/srcs/qemu-7.2.0/hw/virtio/virtio-pci.c
+index a1c9dfa7b..01bb8950e 100644
+--- a/srcs/qemu-7.2.0/hw/virtio/virtio-pci.c
++++ b/srcs/qemu-7.2.0/hw/virtio/virtio-pci.c
+@@ -18,6 +18,8 @@
+ #include "qemu/osdep.h"
+ 
+ #include "exec/memop.h"
++#include "hw/virtio/virtio-test.h"
++#include "hw/virtio/virtio-test-pci.h"
+ #include "standard-headers/linux/virtio_pci.h"
+ #include "hw/boards.h"
+ #include "hw/virtio/virtio.h"
+@@ -2287,11 +2289,80 @@ static const TypeInfo virtio_pci_bus_info = {
+     .class_init    = virtio_pci_bus_class_init,
+ };
+ 
++/* virtio-test-pci */
++static Property virtio_test_pci_properties[] = {
++    DEFINE_PROP_UINT32("class", VirtIOPCIProxy, class_code, 0),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void virtio_test_pci_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
++{
++    VirtIOTestPCI *dev = VIRTIO_TEST_PCI(vpci_dev);
++    DeviceState *vdev = DEVICE(&dev->vdev);
++
++    if (vpci_dev->class_code != PCI_CLASS_OTHERS &&
++        vpci_dev->class_code != PCI_CLASS_MEMORY_RAM) { /* qemu < 1.1 */
++        vpci_dev->class_code = PCI_CLASS_OTHERS;
++    }
++
++    qdev_set_parent_bus(vdev, BUS(&vpci_dev->bus), errp);
++    object_property_set_bool(OBJECT(vdev), "realized", true, errp);
++}
++
++static void virtio_test_pci_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    VirtioPCIClass *k = VIRTIO_PCI_CLASS(klass);
++    PCIDeviceClass *pcidev_k = PCI_DEVICE_CLASS(klass);
++
++    printf("virtio_test_pci_class_init function call\n");
++
++    k->realize = virtio_test_pci_realize;
++    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
++    dc->props_ = virtio_test_pci_properties;
++    pcidev_k->vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET;
++    pcidev_k->device_id = PCI_DEVICE_ID_VIRTIO_TEST;
++    pcidev_k->revision = VIRTIO_PCI_ABI_VERSION;
++    pcidev_k->class_id = PCI_CLASS_OTHERS;
++}
++
++static void virtio_test_pci_instance_init(Object *obj)
++{
++    VirtIOTestPCI *dev = VIRTIO_TEST_PCI(obj);
++
++    printf("virtio_test_pci_instance_init function call\n");
++
++    virtio_instance_init_common(obj, &dev->vdev, sizeof(dev->vdev),
++                                TYPE_VIRTIO_TEST);
++}
++
++// static const TypeInfo virtio_test_pci_info = {
++//     .name          = TYPE_VIRTIO_TEST_PCI,
++//     .parent        = TYPE_VIRTIO_PCI,
++//     .instance_size = sizeof(VirtIOTestPCI),
++//     .instance_init = virtio_test_pci_instance_init,
++//     .class_init    = virtio_test_pci_class_init,
++// };
++
++
++static const VirtioPCIDeviceTypeInfo virtio_test_pci_info = {
++    .base_name              = TYPE_VIRTIO_TEST_PCI,
++    .generic_name           = "virtio-test-pci",
++    .transitional_name      = "virtio-test-pci-transitional",
++    .non_transitional_name  = "virtio-test-pci-non-transitional",
++    .instance_size = sizeof(VirtIOTestPCI),
++    .instance_init = virtio_test_pci_instance_init,
++    .class_init    = virtio_test_pci_class_init,
++};
++
++
+ static void virtio_pci_register_types(void)
+ {
+     /* Base types: */
+     type_register_static(&virtio_pci_bus_info);
+     type_register_static(&virtio_pci_info);
++    // type_register_static(&virtio_test_pci_info);
++    virtio_pci_types_register(&virtio_test_pci_info);
+ }
+ 
+ type_init(virtio_pci_register_types)
+diff --git a/srcs/qemu-7.2.0/hw/virtio/virtio.c b/srcs/qemu-7.2.0/hw/virtio/virtio.c
+index eb6347ab5..101292351 100644
+--- a/srcs/qemu-7.2.0/hw/virtio/virtio.c
++++ b/srcs/qemu-7.2.0/hw/virtio/virtio.c
+@@ -603,7 +603,8 @@ const char *virtio_device_names[] = {
+     [VIRTIO_ID_PARAM_SERV] = "virtio-param-serv",
+     [VIRTIO_ID_AUDIO_POLICY] = "virtio-audio-pol",
+     [VIRTIO_ID_BT] = "virtio-bluetooth",
+-    [VIRTIO_ID_GPIO] = "virtio-gpio"
++    [VIRTIO_ID_GPIO] = "virtio-gpio",
++    [VIRTIO_ID_TEST] = "virtio-test"
+ };
+ 
+ static const char *virtio_id_to_name(uint16_t device_id)
+diff --git a/srcs/qemu-7.2.0/include/hw/pci/pci.h b/srcs/qemu-7.2.0/include/hw/pci/pci.h
+index 6ccaaf515..0f4c0c37f 100644
+--- a/srcs/qemu-7.2.0/include/hw/pci/pci.h
++++ b/srcs/qemu-7.2.0/include/hw/pci/pci.h
+@@ -85,6 +85,7 @@ extern bool pci_available;
+ #define PCI_DEVICE_ID_VIRTIO_RNG         0x1005
+ #define PCI_DEVICE_ID_VIRTIO_9P          0x1009
+ #define PCI_DEVICE_ID_VIRTIO_VSOCK       0x1012
++#define PCI_DEVICE_ID_VIRTIO_TEST        0x1013
+ 
+ /*
+  * modern virtio-pci devices get their id assigned automatically,
+diff --git a/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h b/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h
+index 7aa2eb766..c98f50d05 100644
+--- a/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h
++++ b/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h
+@@ -68,6 +68,7 @@
+ #define VIRTIO_ID_AUDIO_POLICY		39 /* virtio audio policy */
+ #define VIRTIO_ID_BT			40 /* virtio bluetooth */
+ #define VIRTIO_ID_GPIO			41 /* virtio gpio */
++#define VIRTIO_ID_TEST          45 /* virtio test */
+ 
+ /*
+  * Virtio Transitional IDs
