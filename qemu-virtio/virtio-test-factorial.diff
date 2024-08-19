@@ -1,0 +1,706 @@
+commit 7c66a8154f05c9d728f180adab99dafd533afe2f
+Author: liwl <liwl@goldenrivertek.com>
+Date:   Mon Aug 19 16:51:52 2024 +0800
+
+    add virtio-test-factorial driver.
+
+diff --git a/scripts/buildroot/br2_ext/Config.in b/scripts/buildroot/br2_ext/Config.in
+index c001d2147..6fc771f62 100644
+--- a/scripts/buildroot/br2_ext/Config.in
++++ b/scripts/buildroot/br2_ext/Config.in
+@@ -2,3 +2,4 @@ source "$BR2_EXTERNAL_GRT_PATH/package/luning/Config.in"
+ source "$BR2_EXTERNAL_GRT_PATH/package/dummy/Config.in"
+ source "$BR2_EXTERNAL_GRT_PATH/package/computer/Config.in"
+ source "$BR2_EXTERNAL_GRT_PATH/package/chardriver/Config.in"
++source "$BR2_EXTERNAL_GRT_PATH/package/virtio/Config.in"
+diff --git a/scripts/buildroot/br2_ext/package/virtio/Config.in b/scripts/buildroot/br2_ext/package/virtio/Config.in
+new file mode 100644
+index 000000000..2517b8101
+--- /dev/null
++++ b/scripts/buildroot/br2_ext/package/virtio/Config.in
+@@ -0,0 +1,4 @@
++config BR2_PACKAGE_VIRTIO
++	bool "virtio"
++	help
++	  Virtio Information! 
+diff --git a/scripts/buildroot/br2_ext/package/virtio/Makefile b/scripts/buildroot/br2_ext/package/virtio/Makefile
+new file mode 100644
+index 000000000..895f2aa5f
+--- /dev/null
++++ b/scripts/buildroot/br2_ext/package/virtio/Makefile
+@@ -0,0 +1,10 @@
++OBJS = virtio.o
++
++%.o: %.c
++	$(CC) $(CFLAGS) -c -o $@ $<
++
++all: $(OBJS)
++	$(CC) $(LDFLAGS) $(OBJS) -o virtio
++
++clean:
++	@rm -f *.o virtio
+diff --git a/scripts/buildroot/br2_ext/package/virtio/virtio.c b/scripts/buildroot/br2_ext/package/virtio/virtio.c
+new file mode 100644
+index 000000000..f9482771d
+--- /dev/null
++++ b/scripts/buildroot/br2_ext/package/virtio/virtio.c
+@@ -0,0 +1,38 @@
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <stdlib.h>
++#include <string.h>
++#include <stdint.h>
++
++int main(int argc, char *argv[])
++{
++    int fd, retvalue;
++    uint32_t factorial[1];
++
++    if(argc != 2) {
++        printf("ERROR: please enter two parameters!\n");
++        return -1;
++    }
++
++    factorial[0] = atoi(argv[1]); /* string to number */
++
++    fd = open("/dev/virtio_misc", O_RDWR);
++    if(fd < 0) {
++        printf("ERROR: virtio_misc open failed!\n");
++        return -1;
++    }
++
++    retvalue = write(fd, factorial, sizeof(factorial));
++    if(retvalue < 0) {
++        printf("ERROR: write failed!\r\n");
++        close(fd);
++        return -1;
++    }
++
++    close(fd);
++
++    return 0;
++}
+diff --git a/scripts/buildroot/br2_ext/package/virtio/virtio.mk b/scripts/buildroot/br2_ext/package/virtio/virtio.mk
+new file mode 100644
+index 000000000..f5a3cfeb2
+--- /dev/null
++++ b/scripts/buildroot/br2_ext/package/virtio/virtio.mk
+@@ -0,0 +1,18 @@
++#############################################################
++#
++# COMPUTER
++#
++#############################################################
++VIRTIO_LICENSE = GPL-2.0
++VIRTIO_SITE = ${BR2_EXTERNAL_GRT_PATH}/package/virtio
++VIRTIO_SITE_METHOD = local
++
++define VIRTIO_BUILD_CMDS
++	$(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D)
++endef
++
++define VIRTIO_INSTALL_TARGET_CMDS
++	$(INSTALL) -D -m 0755 $(@D)/virtio $(TARGET_DIR)/usr/bin/virtio
++endef
++
++$(eval $(generic-package))
+diff --git a/scripts/buildroot/configs/buildroot_config.arm64 b/scripts/buildroot/configs/buildroot_config.arm64
+index ad2ebf937..661347c7c 100644
+--- a/scripts/buildroot/configs/buildroot_config.arm64
++++ b/scripts/buildroot/configs/buildroot_config.arm64
+@@ -20,3 +20,4 @@ BR2_PACKAGE_DROPBEAR=y
+ BR2_PACKAGE_COMPUTER=y
+ BR2_PACKAGE_LUNING=y
+ BR2_PACKAGE_CHARDRIVER=y
++BR2_PACKAGE_VIRTIO=y
+diff --git a/scripts/devshell/run-qemu b/scripts/devshell/run-qemu
+index 8a4075e68..71fcfb775 100755
+--- a/scripts/devshell/run-qemu
++++ b/scripts/devshell/run-qemu
+@@ -80,6 +80,7 @@ ${QEMU_EXEC} -kernel ${LINUX_IMAGE} \
+     -smp 4 \
+     -m 1024 \
+     -display none -nographic \
++    -device virtio-test-device	\
+     -drive file=${ROOTFS_OUT},if=none,format=raw,id=hd0 -device virtio-blk-device,drive=hd0 \
+     -netdev user,id=net0,net=192.168.3.0/24,hostfwd=tcp::8822-192.168.3.53:22 -device virtio-net-pci,netdev=net0 \
+     -append "console=ttyAMA0,38400 keep_bootcon root=/dev/vda" \
+diff --git a/srcs/linux-5.4.239/drivers/virtio/Makefile b/srcs/linux-5.4.239/drivers/virtio/Makefile
+index 3a2b5c5dc..3019f53c4 100644
+--- a/srcs/linux-5.4.239/drivers/virtio/Makefile
++++ b/srcs/linux-5.4.239/drivers/virtio/Makefile
+@@ -6,3 +6,6 @@ virtio_pci-y := virtio_pci_modern.o virtio_pci_common.o
+ virtio_pci-$(CONFIG_VIRTIO_PCI_LEGACY) += virtio_pci_legacy.o
+ obj-$(CONFIG_VIRTIO_BALLOON) += virtio_balloon.o
+ obj-$(CONFIG_VIRTIO_INPUT) += virtio_input.o
++
++
++obj-y += virtio_test.o
+diff --git a/srcs/linux-5.4.239/drivers/virtio/virtio_test.c b/srcs/linux-5.4.239/drivers/virtio/virtio_test.c
+new file mode 100644
+index 000000000..acc7fcf4d
+--- /dev/null
++++ b/srcs/linux-5.4.239/drivers/virtio/virtio_test.c
+@@ -0,0 +1,218 @@
++#include <linux/virtio.h>
++#include <linux/virtio_test.h>
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/miscdevice.h>
++
++#define MISC_NAME "virtio_misc"
++#define MISC_MINOR  144
++
++struct test_request {
++	__virtio32 arg1;
++    char arg2[32];
++};
++
++struct  test_response {
++	__virtio32 ret;
++};
++
++struct virtio_test {
++    struct test_request req;
++    struct test_response res;
++    struct virtio_device *vdev;
++    struct virtqueue *factorial_vq;
++};
++
++static struct virtio_test *vt_dev;
++
++static void print_response_data(struct virtio_test *vt)
++{
++    printk("virtio response ret is %d\n",vt->res.ret);
++}
++
++/* Called from virtio device, in IRQ context */
++static void test_request_done(struct virtqueue *vq)
++{
++    uint32_t len;
++    struct virtio_test *vt;
++    printk(" %s called, line: %d \n", __func__, __LINE__);
++
++	do {
++		virtqueue_disable_cb(vq);
++		while ((vt = virtqueue_get_buf(vq, &len)) != NULL) {
++			// request packet will be completed by response packet
++            print_response_data(vt);
++		}
++		if (unlikely(virtqueue_is_broken(vq)))
++			break;
++	} while (!virtqueue_enable_cb(vq));
++}
++
++static void build_test_request(struct virtio_test *vt, uint32_t num)
++{
++    vt->req.arg1 = num;
++    strncpy(vt->req.arg2, "hello back end!",
++                            sizeof(vt->req.arg2));
++}
++
++static void virtio_test_submit_request(uint32_t num)
++{
++    struct virtqueue *vq;
++    struct virtio_test *vt;
++    struct scatterlist out_sg, in_sg, *sgs[2];
++
++	int num_out = 0, num_in = 0;
++
++    vt = vt_dev;
++    vq = vt->factorial_vq;
++
++    build_test_request(vt, num);
++
++    sg_init_one(&out_sg, &vt->req, sizeof(vt->req));
++    sgs[num_out++] = &out_sg;
++	sg_init_one(&in_sg, &vt->res, sizeof(vt->res));
++	sgs[num_out + num_in++] = &in_sg;
++
++    /* We should always be able to add one buffer to an empty queue. */
++	virtqueue_add_sgs(vq, sgs, num_out, num_in, vt, GFP_ATOMIC);
++    virtqueue_kick(vq);
++}
++
++static int init_vqs(struct virtio_test *vt)
++{
++    int err, nvqs;
++    struct virtqueue *vqs[1];
++    vq_callback_t *callbacks[] = { test_request_done };
++    const char * const names[] = { "virtio_test"};
++
++    nvqs = virtio_has_feature(vt->vdev, VIRTIO_TEST_F_CAN_PRINT) ? 1 : 0;
++    err = virtio_find_vqs(vt->vdev, nvqs, vqs, callbacks, names, NULL);
++    if (err)
++        return err;
++
++    vt->factorial_vq = vqs[0];
++
++    return 0;
++}
++
++static void remove_common(struct virtio_test *vt)
++{
++    vt->vdev->config->reset(vt->vdev);
++    vt->vdev->config->del_vqs(vt->vdev);
++}
++
++static int virtio_misc_open(struct inode *inode, struct file *filp)
++{
++    return 0;
++}
++
++static int virtio_misc_release(struct inode *inode, struct file *filp)
++{
++    return 0;
++}
++
++static ssize_t virtio_misc_write(struct file *filp, const char __user *buf,
++			 size_t count, loff_t *ppos)
++{
++    int ret;
++    uint32_t factorial[1];
++
++    ret = copy_from_user(factorial, buf, count);
++    if(ret < 0)
++        return -EINVAL;
++
++    virtio_test_submit_request(factorial[0]);
++
++    return 0;
++}
++
++struct file_operations virtio_misc_fops = {
++    .owner = THIS_MODULE,
++    .open = virtio_misc_open,
++    .release = virtio_misc_release,
++    .write = virtio_misc_write,
++};
++
++static struct miscdevice virtio_miscdev = {
++    .minor = MISC_MINOR,
++    .name = MISC_NAME,
++    .fops = &virtio_misc_fops,
++};
++
++static int virttest_probe(struct virtio_device *vdev)
++{
++    int err;
++    struct virtio_test *vt;
++
++    if (!vdev->config->get) {
++        return -EINVAL;
++    }
++
++    vdev->priv = vt = kmalloc(sizeof(*vt), GFP_KERNEL);
++    if (!vt) {
++        err = -ENOMEM;
++        goto out;
++    }
++
++    vt->vdev = vdev;
++
++    err = init_vqs(vt);
++    if (err)
++        goto out_free_vt;
++
++    virtio_device_ready(vdev);
++
++    vt_dev = vt;
++
++    /* misc driver registered */
++    err = misc_register(&virtio_miscdev);
++    if(err < 0) {
++        printk( "misc register is failed\n");
++        goto out_free_misc;
++    }
++    printk( "misc register has succeeded\n");
++
++    return 0;
++
++out_free_misc:
++    misc_deregister(&virtio_miscdev);
++out_free_vt:
++    kfree(vt);
++out:
++    return err;
++}
++
++static void virttest_remove(struct virtio_device *vdev)
++{
++    struct virtio_test *vt = vdev->priv;
++
++    remove_common(vt);
++    kfree(vt);
++    vt_dev = NULL;
++    misc_deregister(&virtio_miscdev);
++}
++
++static struct virtio_device_id id_table[] = {
++    { VIRTIO_ID_TEST, VIRTIO_DEV_ANY_ID },
++    { 0 },
++};
++
++static unsigned int features[] = {
++    VIRTIO_TEST_F_CAN_PRINT,
++};
++
++static struct virtio_driver virtio_test_driver = {
++    .feature_table = features,
++    .feature_table_size = ARRAY_SIZE(features),
++    .driver.name =  KBUILD_MODNAME,
++    .driver.owner = THIS_MODULE,
++    .id_table = id_table,
++    .probe =    virttest_probe,
++    .remove =   virttest_remove,
++};
++
++module_virtio_driver(virtio_test_driver);
++MODULE_DEVICE_TABLE(virtio, id_table);
++MODULE_DESCRIPTION("Virtio test driver");
++MODULE_LICENSE("GPL");
+\ No newline at end of file
+diff --git a/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h b/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h
+index 585e07b27..060f24c57 100644
+--- a/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h
++++ b/srcs/linux-5.4.239/include/uapi/linux/virtio_ids.h
+@@ -46,5 +46,6 @@
+ #define VIRTIO_ID_IOMMU        23 /* virtio IOMMU */
+ #define VIRTIO_ID_FS           26 /* virtio filesystem */
+ #define VIRTIO_ID_PMEM         27 /* virtio pmem */
++#define VIRTIO_ID_TEST         45 /* virtio test */
+ 
+ #endif /* _LINUX_VIRTIO_IDS_H */
+diff --git a/srcs/linux-5.4.239/include/uapi/linux/virtio_test.h b/srcs/linux-5.4.239/include/uapi/linux/virtio_test.h
+new file mode 100644
+index 000000000..a169a9454
+--- /dev/null
++++ b/srcs/linux-5.4.239/include/uapi/linux/virtio_test.h
+@@ -0,0 +1,21 @@
++#ifndef _LINUX_VIRTIO_TEST_H_
++#define _LINUX_VIRTIO_TEST_H_
++
++#include <linux/types.h>
++#include <linux/virtio_types.h>
++#include <linux/virtio_ids.h>
++#include <linux/virtio_config.h>
++
++#define VIRTIO_TEST_F_CAN_PRINT 0
++
++struct virtio_test_config {
++    __u32 num_pages;
++    __u32 actual;
++};
++
++struct virtio_test_stat {
++    __virtio16 tag;
++    __virtio64 val;
++} __attribute__((packed));
++
++#endif
+\ No newline at end of file
+diff --git a/srcs/qemu-7.2.0/hw/virtio/Kconfig b/srcs/qemu-7.2.0/hw/virtio/Kconfig
+index cbfd8c717..52a96a821 100644
+--- a/srcs/qemu-7.2.0/hw/virtio/Kconfig
++++ b/srcs/qemu-7.2.0/hw/virtio/Kconfig
+@@ -30,6 +30,11 @@ config VIRTIO_BALLOON
+     default y
+     depends on VIRTIO
+ 
++config VIRTIO_TEST
++    bool
++    default y
++    depends on VIRTIO
++
+ config VIRTIO_CRYPTO
+     bool
+     default y
+diff --git a/srcs/qemu-7.2.0/hw/virtio/meson.build b/srcs/qemu-7.2.0/hw/virtio/meson.build
+index dfed1e7af..1ec8a9830 100644
+--- a/srcs/qemu-7.2.0/hw/virtio/meson.build
++++ b/srcs/qemu-7.2.0/hw/virtio/meson.build
+@@ -18,6 +18,7 @@ else
+   softmmu_virtio_ss.add(files('vhost-stub.c'))
+ endif
+ 
++virtio_ss.add(when: 'CONFIG_VIRTIO_TEST', if_true: files('virtio-test.c'))
+ virtio_ss.add(when: 'CONFIG_VIRTIO_BALLOON', if_true: files('virtio-balloon.c'))
+ virtio_ss.add(when: 'CONFIG_VIRTIO_CRYPTO', if_true: files('virtio-crypto.c'))
+ virtio_ss.add(when: 'CONFIG_VHOST_USER_FS', if_true: files('vhost-user-fs.c'))
+diff --git a/srcs/qemu-7.2.0/hw/virtio/virtio-test.c b/srcs/qemu-7.2.0/hw/virtio/virtio-test.c
+new file mode 100644
+index 000000000..956220760
+--- /dev/null
++++ b/srcs/qemu-7.2.0/hw/virtio/virtio-test.c
+@@ -0,0 +1,181 @@
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/iov.h"
++#include "hw/virtio/virtio.h"
++#include "sysemu/kvm.h"
++#include "sysemu/hax.h"
++#include "exec/address-spaces.h"
++#include "qapi/error.h"
++#include "qapi/qapi-events-misc.h"
++#include "qapi/visitor.h"
++#include "qemu/error-report.h"
++#include "hw/virtio/virtio-bus.h"
++#include "hw/virtio/virtio-access.h"
++#include "migration/migration.h"
++
++#include "hw/virtio/virtio-test.h"
++
++static uint32_t Queue_Size = 128;
++
++struct test_request {
++	uint32_t arg1;
++    char arg2[32];
++};
++
++struct test_response {
++	uint32_t ret;
++};
++
++static uint32_t factorial(uint32_t n) {
++    uint32_t result = 1;
++
++    for (uint32_t i = 1; i <= n; i++) {
++        result *= i;
++    }  
++    return result;
++}
++
++static void print_req_and_build_resp_pack(struct test_request *req, struct test_response *res)
++{    
++    qemu_log("QEMU: >>> get arg1 [ %d ] form the front end <<<\n", req->arg1);
++    qemu_log("QEMU: >>> get arg2 [ %s ] form the front end <<<\n", req->arg2);
++
++    res->ret = factorial(req->arg1);
++}
++
++static void virtio_test_handle_output(VirtIODevice *vdev, VirtQueue *vq)
++{
++    struct test_request req;
++    struct test_response res;
++    VirtQueueElement *elem;
++    size_t offset = 0;
++
++    for (;;) {
++
++        elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
++        if (!elem)
++            return;
++
++        if (!iov_to_buf(elem->out_sg, elem->out_num, offset, &req, sizeof(req))) {
++            qemu_log("QEMU ERROR: iov_to_buf function failed.\n");
++            virtqueue_detach_element(vq, elem, 0);
++            continue;
++        }
++
++        print_req_and_build_resp_pack(&req, &res);
++
++        iov_from_buf(elem->in_sg, elem->in_num, offset, &res, sizeof(res));
++
++        virtqueue_push(vq, elem, sizeof(res));
++        virtio_notify(vdev, vq);
++        g_free(elem);
++    }
++}
++
++static void virtio_test_get_config(VirtIODevice *vdev, uint8_t *config_data)
++{
++    VirtIOTest *dev = VIRTIO_TEST(vdev);
++    struct virtio_test_config config;
++
++    config.actual = cpu_to_le32(dev->actual);
++    config.event = cpu_to_le32(dev->event);
++    memcpy(config_data, &config, sizeof(struct virtio_test_config));
++}
++
++static void virtio_test_set_config(VirtIODevice *vdev,
++                                      const uint8_t *config_data)
++{
++    VirtIOTest *dev = VIRTIO_TEST(vdev);
++    struct virtio_test_config config;
++
++    memcpy(&config, config_data, sizeof(struct virtio_test_config));
++    dev->actual = le32_to_cpu(config.actual);
++    dev->event = le32_to_cpu(config.event);
++}
++
++static uint64_t virtio_test_get_features(VirtIODevice *vdev, uint64_t f,
++                                            Error **errp)
++{
++    VirtIOTest *dev = VIRTIO_TEST(vdev);
++
++    f |= dev->host_features;
++    virtio_add_feature(&f, VIRTIO_TEST_F_CAN_PRINT);
++
++    return f;
++}
++
++static void virtio_test_device_realize(DeviceState *dev, Error **errp)
++{
++    VirtIODevice *vdev = VIRTIO_DEVICE(dev);
++    VirtIOTest *s = VIRTIO_TEST(dev);
++
++    virtio_init(vdev, VIRTIO_ID_TEST, sizeof(struct virtio_test_config));
++    s->ivq = virtio_add_queue(vdev, Queue_Size, virtio_test_handle_output);
++}
++
++static void virtio_test_device_unrealize(DeviceState *dev)
++{
++    VirtIODevice *vdev = VIRTIO_DEVICE(dev);
++
++    virtio_cleanup(vdev);
++}
++
++static int virtio_test_post_load_device(void *opaque, int version_id)
++{
++    return 0;
++}
++
++static const VMStateDescription vmstate_virtio_test_device = {
++    .name = "virtio-test-device",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = virtio_test_post_load_device,
++    .fields = (VMStateField[]) {
++        VMSTATE_UINT32(actual, VirtIOTest),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const VMStateDescription vmstate_virtio_test = {
++    .name = "virtio-test",
++    .minimum_version_id = 1,
++    .version_id = 1,
++    .fields = (VMStateField[]) {
++        VMSTATE_VIRTIO_DEVICE,
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static Property virtio_test_properties[] = {
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void virtio_test_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
++
++    dc->props_ = virtio_test_properties;
++    dc->vmsd = &vmstate_virtio_test;
++    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
++    vdc->realize = virtio_test_device_realize;
++    vdc->unrealize = virtio_test_device_unrealize;
++    vdc->get_config = virtio_test_get_config;
++    vdc->set_config = virtio_test_set_config;
++    vdc->get_features = virtio_test_get_features;
++    vdc->vmsd = &vmstate_virtio_test_device;
++}
++
++static const TypeInfo virtio_test_info = {
++    .name = TYPE_VIRTIO_TEST,
++    .parent = TYPE_VIRTIO_DEVICE,
++    .instance_size = sizeof(VirtIOTest),
++    .class_init = virtio_test_class_init,
++};
++
++static void virtio_register_types(void)
++{
++    type_register_static(&virtio_test_info);
++}
++
++type_init(virtio_register_types)
+\ No newline at end of file
+diff --git a/srcs/qemu-7.2.0/hw/virtio/virtio.c b/srcs/qemu-7.2.0/hw/virtio/virtio.c
+index eb6347ab5..101292351 100644
+--- a/srcs/qemu-7.2.0/hw/virtio/virtio.c
++++ b/srcs/qemu-7.2.0/hw/virtio/virtio.c
+@@ -603,7 +603,8 @@ const char *virtio_device_names[] = {
+     [VIRTIO_ID_PARAM_SERV] = "virtio-param-serv",
+     [VIRTIO_ID_AUDIO_POLICY] = "virtio-audio-pol",
+     [VIRTIO_ID_BT] = "virtio-bluetooth",
+-    [VIRTIO_ID_GPIO] = "virtio-gpio"
++    [VIRTIO_ID_GPIO] = "virtio-gpio",
++    [VIRTIO_ID_TEST] = "virtio-test"
+ };
+ 
+ static const char *virtio_id_to_name(uint16_t device_id)
+diff --git a/srcs/qemu-7.2.0/include/hw/virtio/virtio-test.h b/srcs/qemu-7.2.0/include/hw/virtio/virtio-test.h
+new file mode 100644
+index 000000000..4c4748277
+--- /dev/null
++++ b/srcs/qemu-7.2.0/include/hw/virtio/virtio-test.h
+@@ -0,0 +1,24 @@
++#ifndef QEMU_VIRTIO_TEST_H
++#define QEMU_VIRTIO_TEST_H
++
++#include "standard-headers/linux/virtio_test.h"
++#include "hw/virtio/virtio.h"
++
++#define TYPE_VIRTIO_TEST "virtio-test-device"
++#define VIRTIO_TEST(obj) \
++        OBJECT_CHECK(VirtIOTest, (obj), TYPE_VIRTIO_TEST)
++
++typedef struct VirtIOTest {
++    VirtIODevice parent_obj;
++    VirtQueue *ivq;
++    uint32_t host_features;
++    QEMUTimer *stats_timer;
++    uint32_t actual;
++    uint32_t event;
++    uint32_t num_pages;
++    size_t stats_vq_offset;
++    VirtQueueElement *stats_vq_elem;
++} VirtIOTest;
++
++#endif
++
+diff --git a/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h b/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h
+index 7aa2eb766..c98f50d05 100644
+--- a/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h
++++ b/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_ids.h
+@@ -68,6 +68,7 @@
+ #define VIRTIO_ID_AUDIO_POLICY		39 /* virtio audio policy */
+ #define VIRTIO_ID_BT			40 /* virtio bluetooth */
+ #define VIRTIO_ID_GPIO			41 /* virtio gpio */
++#define VIRTIO_ID_TEST          45 /* virtio test */
+ 
+ /*
+  * Virtio Transitional IDs
+diff --git a/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_test.h b/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_test.h
+new file mode 100644
+index 000000000..1116b9def
+--- /dev/null
++++ b/srcs/qemu-7.2.0/include/standard-headers/linux/virtio_test.h
+@@ -0,0 +1,22 @@
++#ifndef _LINUX_VIRTIO_TEST_H
++#define _LINUX_VIRTIO_TEST_H
++
++#include "standard-headers/linux/types.h"
++#include "standard-headers/linux/virtio_types.h"
++#include "standard-headers/linux/virtio_ids.h"
++#include "standard-headers/linux/virtio_config.h"
++
++#define VIRTIO_TEST_F_CAN_PRINT    0
++
++struct virtio_test_config {
++    uint32_t num_pages;
++    uint32_t actual;
++    uint32_t event;
++};
++
++struct virtio_test_stat {
++    __virtio16 tag;
++    __virtio64 val;
++} QEMU_PACKED;
++
++#endif
+\ No newline at end of file
