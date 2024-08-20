@@ -6,6 +6,11 @@ virtio-mmio doc: https://blog.csdn.net/qq_48458789/article/details/141124876?spm
 
 virtio-test-factorial doc: https://blog.csdn.net/qq_48458789/article/details/141310826
 
+[虚拟化]qemu+kvm MMIO机制: https://zhuanlan.zhihu.com/p/681103916
+
+
+
+
 
 memory_region_init_io注册回调函数的调用顺序:
   https://blog.csdn.net/siying666/article/details/133948172
