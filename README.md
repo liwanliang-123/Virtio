@@ -27,3 +27,4 @@ REDHAT.com:
 QEMU virtio_notify -> kvm -> kvm 给 vcpu 注入中断的流程： 
   https://luohao-brian.gitbooks.io/interrupt-virtualization/content/qemu-kvm-zhong-duan-xu-ni-hua-kuang-jia-fen-679028-4e2d29.html
 
+从0写一个virtio设备 ：https://www.cnblogs.com/edver/p/15874178.html
